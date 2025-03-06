@@ -54,4 +54,4 @@ print(f"AUC score: {score:.4f}")
 
 ## License
 
-[Your chosen license]
+MIT
