@@ -139,17 +139,40 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
         
         # Transform data to Gaussian space by solving the ODE in reverse
         with torch.no_grad():
-            # Solve the ODE to get points in Gaussian space
-            gaussian_samples = self.solver.sample(
-                time_grid=T, 
-                x_init=X_tensor, 
-                method='midpoint', 
-                step_size=step_size, 
-                return_intermediates=False
-            )
-            
-            # The samples are at t=0 (Gaussian space)
-            x_gaussian = gaussian_samples[-1] if isinstance(gaussian_samples, list) else gaussian_samples
+            # Process in batches if data is large
+            batch_size = 10000
+            if X_tensor.shape[0] > batch_size:
+                # Initialize storage for all Gaussian samples
+                x_gaussian = torch.zeros_like(X_tensor)
+                
+                # Process in batches
+                for i in range(0, X_tensor.shape[0], batch_size):
+                    end_idx = min(i + batch_size, X_tensor.shape[0])
+                    batch = X_tensor[i:end_idx]
+                    
+                    # Solve the ODE for this batch
+                    gaussian_batch = self.solver.sample(
+                        time_grid=T,
+                        x_init=batch,
+                        method='midpoint',
+                        step_size=step_size,
+                        return_intermediates=False
+                    )
+                    
+                    # Store the results
+                    x_gaussian[i:end_idx] = gaussian_batch[-1] if isinstance(gaussian_batch, list) else gaussian_batch
+            else:
+                # For smaller datasets, process all at once
+                gaussian_samples = self.solver.sample(
+                    time_grid=T, 
+                    x_init=X_tensor, 
+                    method='midpoint', 
+                    step_size=step_size, 
+                    return_intermediates=False
+                )
+                
+                # The samples are at t=0 (Gaussian space)
+                x_gaussian = gaussian_samples[-1] if isinstance(gaussian_samples, list) else gaussian_samples
         
         # Calculate log density in Gaussian space
         log_density = self.gaussian.log_prob(x_gaussian)

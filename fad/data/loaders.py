@@ -3,6 +3,7 @@ import pandas as pd
 from dataclasses import dataclass
 from typing import Optional, Tuple, Dict, Any
 import os
+import h5py
 
 
 @dataclass
@@ -34,6 +35,21 @@ def load_dataset(path: str, **kwargs) -> Dataset:
         return _load_npz_dataset(path, **kwargs)
     else:
         raise ValueError(f"Unsupported file format for {path}")
+  
+    
+def load_challenge_dataset(path_bkg: str, path_anom: str, **kwargs) -> Dataset:
+    """
+    Load a dataset from a path.
+    
+    Args:
+        path_bkg: Path to the background dataset file
+        path_anom: Path to the anomaly dataset file
+        **kwargs: Additional parameters for loading
+    
+    Returns:
+        Dataset: A Dataset object containing train and test data
+    """
+    return _load_h5_challenge_dataset(path_bkg, path_anom, **kwargs)
 
 
 def _load_csv_dataset(path: str, 
@@ -97,3 +113,45 @@ def _load_npz_dataset(path: str, **kwargs) -> Dataset:
         test_labels=test_labels,
         metadata={"source": path}
     )
+
+def _load_h5_challenge_dataset(path_bkg: str, path_anom: str, **kwargs) -> Dataset:
+    """Load dataset from a HDF5 file."""
+    
+    data_bkg = h5py.File(path_bkg, 'r')
+    data_anom = h5py.File(path_anom, 'r')
+    
+    # limit to 100k events for now
+    x_bkg = data_bkg['Particles'][:100000]
+    x_anom = data_anom['Particles'][:30000]
+    # shape is (n_events, n_part, n_features), we flatten the last two dimensions
+    x_bkg = x_bkg.reshape(x_bkg.shape[0], -1)
+    x_anom = x_anom.reshape(x_anom.shape[0], -1)
+    
+    # # assign the labels
+    y_bkg = np.zeros(x_bkg.shape[0])
+    y_anom = np.ones(x_anom.shape[0])
+    
+    # # split into train and test
+    # 70k of bkg for training, the rest for testing with the anom
+    n_train_bkg = 70000
+    n_test_bkg = x_bkg.shape[0] - n_train_bkg
+    n_test_anom = x_anom.shape[0]
+    
+    X_train_bkg = x_bkg[:n_train_bkg]
+    X_test_bkg = x_bkg[n_train_bkg:]
+    X_test_anom = x_anom
+    
+    y_train_bkg = y_bkg[:n_train_bkg]
+    y_test_bkg = y_bkg[n_train_bkg:]
+    y_test_anom = y_anom
+    
+    return Dataset(
+        train=X_train_bkg,
+        test=np.concatenate((X_test_bkg, X_test_anom)),
+        train_labels=y_train_bkg,
+        test_labels=np.concatenate((y_test_bkg, y_test_anom)),
+        metadata={"source": path_bkg}
+    )
+    
+    
+    

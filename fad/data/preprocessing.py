@@ -97,8 +97,11 @@ class TSNEFunction(BaseFunction):
         self.tsne.fit(X)
         return self
     
-    def transform(self, X):
-        return self.tsne.transform(X)
+    def transform(self, X, fit=True):
+        if fit:
+            return self.tsne.fit_transform(X)
+        else:
+            raise ValueError("t-SNE does not support transform without fitting.")
     
     def inverse_transform(self, X):
         return self.tsne.inverse_transform(X)
