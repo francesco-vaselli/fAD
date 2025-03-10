@@ -1,7 +1,7 @@
 """
 fAD: Flow-based Anomaly Detection and Coverage Checks
 
-A Python package for anomaly detection using flow-based approaches and 
+A Python package for anomaly detection using flow-based approaches and
 performing comprehensive coverage checks on the results.
 """
 

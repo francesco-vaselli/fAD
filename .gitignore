@@ -1,4 +1,6 @@
 */ad_challenge/*
+*.png
+*.h5
 
 # Python
 __pycache__/
