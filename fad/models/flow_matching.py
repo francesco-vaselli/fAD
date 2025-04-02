@@ -275,3 +275,58 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
             raise ValueError(f"Unknown mode: {mode}, expected 'ODE' or 'vt'")
 
         return anomaly_scores, transformed_data
+
+    def save(self, path: str) -> None:
+        """
+        Save the model to a file.
+        """
+
+        # Save the model state
+        torch.save(self.vf.state_dict(), path)
+        print(f"Model saved to {path}")
+
+    def load(self, path: str) -> None:
+        """
+        Load the model from a file.
+        """
+        # initialize the model
+        if self.model_type == "mlp":
+            self.vf = MLP(
+                input_dim=self.input_dim,
+                time_dim=1,
+                hidden_dim=self.hidden_dim,
+                num_layers=self.num_layers,
+                dropout_rate=self.dropout_rate,
+                use_batch_norm=self.use_batch_norm,
+            ).to(self.device)
+        elif self.model_type == "resnet":
+            self.vf = ResNet(
+                input_dim=self.input_dim,
+                time_dim=1,
+                hidden_dim=self.hidden_dim,
+                num_blocks=self.num_layers,
+                dropout_rate=self.dropout_rate,
+                use_batch_norm=self.use_batch_norm,
+            ).to(self.device)
+        else:
+            raise ValueError(
+                f"Unknown model type: {self.model_type}, expected 'mlp' or 'resnet'"
+            )
+        # Load the model state
+        self.vf.load_state_dict(torch.load(path))
+        self.vf.to(self.device)
+        print(f"Model loaded from {path}")
+        # Reinitialize the wrapped model and solver
+        self.wrapped_vf = WrappedModel(self.vf)
+        self.solver = ODESolver(velocity_model=self.wrapped_vf)
+        self.gaussian = Independent(
+            Normal(
+                torch.zeros(self.input_dim, device=self.device),
+                torch.ones(self.input_dim, device=self.device),
+            ),
+            1,
+        )
+        # Ensure the model is in evaluation mode
+        self.vf.eval()
+        self.wrapped_vf.eval()
+        self.solver.eval()
