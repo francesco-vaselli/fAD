@@ -37,7 +37,9 @@ def load_dataset(path: str, **kwargs) -> Dataset:
         raise ValueError(f"Unsupported file format for {path}")
 
 
-def load_challenge_dataset(path_bkg: str, path_anom: str, **kwargs) -> Dataset:
+def load_challenge_dataset(
+    path_bkg: str, path_anom: str, n_train: int, n_test: int, **kwargs
+) -> Dataset:
     """
     Load a dataset from a path.
 
@@ -49,7 +51,7 @@ def load_challenge_dataset(path_bkg: str, path_anom: str, **kwargs) -> Dataset:
     Returns:
         Dataset: A Dataset object containing train and test data
     """
-    return _load_h5_challenge_dataset(path_bkg, path_anom, **kwargs)
+    return _load_h5_challenge_dataset(path_bkg, path_anom, n_train, n_test, **kwargs)
 
 
 def _load_csv_dataset(
@@ -115,15 +117,17 @@ def _load_npz_dataset(path: str, **kwargs) -> Dataset:
     )
 
 
-def _load_h5_challenge_dataset(path_bkg: str, path_anom: str, **kwargs) -> Dataset:
+def _load_h5_challenge_dataset(
+    path_bkg: str, path_anom: str, n_train: int, n_test: int, **kwargs
+) -> Dataset:
     """Load dataset from a HDF5 file."""
 
     data_bkg = h5py.File(path_bkg, "r")
     data_anom = h5py.File(path_anom, "r")
 
     # limit to 100k events for now
-    x_bkg = data_bkg["Particles"][:100000]
-    x_anom = data_anom["Particles"][:30000]
+    x_bkg = data_bkg["Particles"][: n_train + n_test]
+    x_anom = data_anom["Particles"][:n_test]
     # shape is (n_events, n_part, n_features), we flatten the last two dimensions
     x_bkg = x_bkg.reshape(x_bkg.shape[0], -1)
     x_anom = x_anom.reshape(x_anom.shape[0], -1)
@@ -133,17 +137,15 @@ def _load_h5_challenge_dataset(path_bkg: str, path_anom: str, **kwargs) -> Datas
     y_anom = np.ones(x_anom.shape[0])
 
     # # split into train and test
-    # 70k of bkg for training, the rest for testing with the anom
-    n_train_bkg = 70000
-    n_test_bkg = x_bkg.shape[0] - n_train_bkg
+    n_test_bkg = x_bkg.shape[0] - n_train
     n_test_anom = x_anom.shape[0]
 
-    X_train_bkg = x_bkg[:n_train_bkg]
-    X_test_bkg = x_bkg[n_train_bkg:]
+    X_train_bkg = x_bkg[:n_train]
+    X_test_bkg = x_bkg[n_train:]
     X_test_anom = x_anom
 
-    y_train_bkg = y_bkg[:n_train_bkg]
-    y_test_bkg = y_bkg[n_train_bkg:]
+    y_train_bkg = y_bkg[:n_train]
+    y_test_bkg = y_bkg[n_train:]
     y_test_anom = y_anom
 
     return Dataset(

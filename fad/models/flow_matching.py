@@ -176,76 +176,102 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
             1,
         )
 
-    def predict(self, X: np.ndarray, step_size=0.05, **kwargs) -> np.ndarray:
+    def predict(
+        self, X: np.ndarray, step_size=0.05, mode: str = "ODE", **kwargs
+    ) -> tuple:
         """
-        Predict anomaly scores for the input data based on the flow to Gaussian space.
+        Predict anomaly scores for the input data.
+
+        Mode options:
+        - "ODE": Uses the ODE solver to transform data to Gaussian space
+        - "vt": Directly evaluates the model at time T=1 (anomalous data get less displaced)
 
         Args:
             X: Data of shape (n_samples, n_features)
-            step_size: Step size for ODE solver
+            step_size: Step size for ODE solver when mode="ODE"
+            mode: Prediction mode - "ODE" or "vt"
             **kwargs: Additional model-specific parameters
 
         Returns:
-            np.ndarray: Anomaly scores where higher values indicate more anomalous samples
+            tuple: (anomaly_scores, transformed_data) where anomaly_scores is an np.ndarray
+                  with higher values indicating more anomalous samples
         """
-        if self.solver is None or self.vf is None:
+        if self.vf is None:
             raise ValueError("Model has not been trained. Call fit() first.")
 
         # Convert data to torch tensor and move to device
         X_tensor = torch.tensor(X, dtype=torch.float32).to(self.device)
 
-        # Set up reverse time grid (from 1 to 0)
-        T = torch.tensor([1.0, 0.0], device=self.device)
+        if mode.lower() == "ode":
+            if self.solver is None:
+                raise ValueError("ODE solver not initialized. Call fit() first.")
 
-        # Transform data to Gaussian space by solving the ODE in reverse
-        with torch.no_grad():
-            # Process in batches if data is large
-            batch_size = 10000
-            if X_tensor.shape[0] > batch_size:
-                # Initialize storage for all Gaussian samples
-                x_gaussian = torch.zeros_like(X_tensor)
+            # Set up reverse time grid (from 1 to 0)
+            T = torch.tensor([1.0, 0.0], device=self.device)
 
-                # Process in batches
-                for i in range(0, X_tensor.shape[0], batch_size):
-                    end_idx = min(i + batch_size, X_tensor.shape[0])
-                    batch = X_tensor[i:end_idx]
+            # Transform data to Gaussian space by solving the ODE in reverse
+            with torch.no_grad():
+                # Process in batches if data is large
+                batch_size = 10000
+                if X_tensor.shape[0] > batch_size:
+                    # Initialize storage for all Gaussian samples
+                    x_gaussian = torch.zeros_like(X_tensor)
 
-                    # Solve the ODE for this batch
-                    gaussian_batch = self.solver.sample(
+                    # Process in batches
+                    for i in range(0, X_tensor.shape[0], batch_size):
+                        end_idx = min(i + batch_size, X_tensor.shape[0])
+                        batch = X_tensor[i:end_idx]
+
+                        # Solve the ODE for this batch
+                        gaussian_batch = self.solver.sample(
+                            time_grid=T,
+                            x_init=batch,
+                            method="midpoint",
+                            step_size=step_size,
+                            return_intermediates=False,
+                        )
+
+                        # Store the results
+                        x_gaussian[i:end_idx] = (
+                            gaussian_batch[-1]
+                            if isinstance(gaussian_batch, list)
+                            else gaussian_batch
+                        )
+                else:
+                    # For smaller datasets, process all at once
+                    gaussian_samples = self.solver.sample(
                         time_grid=T,
-                        x_init=batch,
+                        x_init=X_tensor,
                         method="midpoint",
                         step_size=step_size,
                         return_intermediates=False,
                     )
 
-                    # Store the results
-                    x_gaussian[i:end_idx] = (
-                        gaussian_batch[-1]
-                        if isinstance(gaussian_batch, list)
-                        else gaussian_batch
+                    # The samples are at t=0 (Gaussian space)
+                    x_gaussian = (
+                        gaussian_samples[-1]
+                        if isinstance(gaussian_samples, list)
+                        else gaussian_samples
                     )
-            else:
-                # For smaller datasets, process all at once
-                gaussian_samples = self.solver.sample(
-                    time_grid=T,
-                    x_init=X_tensor,
-                    method="midpoint",
-                    step_size=step_size,
-                    return_intermediates=False,
-                )
 
-                # The samples are at t=0 (Gaussian space)
-                x_gaussian = (
-                    gaussian_samples[-1]
-                    if isinstance(gaussian_samples, list)
-                    else gaussian_samples
-                )
+            # Calculate log density in Gaussian space
+            log_density = self.gaussian.log_prob(x_gaussian)
 
-        # Calculate log density in Gaussian space
-        log_density = self.gaussian.log_prob(x_gaussian)
+            # Anomaly score is negative log density (lower density = higher anomaly score)
+            anomaly_scores = -log_density.cpu().numpy()
+            transformed_data = x_gaussian.cpu().numpy()
 
-        # Anomaly score is negative log density (lower density = higher anomaly score)
-        anomaly_scores = -log_density.cpu().numpy()
+        elif mode.lower() == "vt":
+            # Direct vector field evaluation at t=1
+            with torch.no_grad():
+                t = torch.zeros(X_tensor.shape[0], device=self.device)
+                # Get vector field at t=1
+                vector_field = self.vf(X_tensor, t)
+                # Use the magnitude of the vector field as anomaly score
+                # Higher magnitude indicates more displacement needed, suggesting anomaly
+                anomaly_scores = torch.norm(vector_field, dim=1).cpu().numpy()
+                transformed_data = X_tensor.cpu().numpy()
+        else:
+            raise ValueError(f"Unknown mode: {mode}, expected 'ODE' or 'vt'")
 
-        return anomaly_scores, x_gaussian.cpu().numpy()
+        return anomaly_scores, transformed_data
