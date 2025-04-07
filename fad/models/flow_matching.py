@@ -79,22 +79,6 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
         self.solver = None
         self.gaussian = None
 
-    def fit(self, X: np.ndarray, **kwargs) -> None:
-        """
-        Fit the Flow Matching model to the training data.
-
-        Args:
-            X: Training data of shape (n_samples, n_features)
-            **kwargs: Additional model-specific parameters
-        """
-        # Override parameters if provided in kwargs
-        for key, value in kwargs.items():
-            if hasattr(self, key):
-                setattr(self, key, value)
-
-        # Convert data to torch tensor and move to device
-        X_tensor = torch.tensor(X, dtype=torch.float32).to(self.device)
-
         # Initialize model based on model_type
         if self.model_type == "mlp":
             self.vf = MLP(
@@ -118,6 +102,22 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
             raise ValueError(
                 f"Unknown model type: {self.model_type}, expected 'mlp' or 'resnet'"
             )
+
+    def fit(self, X: np.ndarray, **kwargs) -> None:
+        """
+        Fit the Flow Matching model to the training data.
+
+        Args:
+            X: Training data of shape (n_samples, n_features)
+            **kwargs: Additional model-specific parameters
+        """
+        # Override parameters if provided in kwargs
+        for key, value in kwargs.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
+
+        # Convert data to torch tensor and move to device
+        X_tensor = torch.tensor(X, dtype=torch.float32).to(self.device)
 
         path = AffineProbPath(scheduler=CondOTScheduler())
         optim = torch.optim.Adam(self.vf.parameters(), lr=self.lr)
@@ -289,29 +289,6 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
         """
         Load the model from a file.
         """
-        # initialize the model
-        if self.model_type == "mlp":
-            self.vf = MLP(
-                input_dim=self.input_dim,
-                time_dim=1,
-                hidden_dim=self.hidden_dim,
-                num_layers=self.num_layers,
-                dropout_rate=self.dropout_rate,
-                use_batch_norm=self.use_batch_norm,
-            ).to(self.device)
-        elif self.model_type == "resnet":
-            self.vf = ResNet(
-                input_dim=self.input_dim,
-                time_dim=1,
-                hidden_dim=self.hidden_dim,
-                num_blocks=self.num_layers,
-                dropout_rate=self.dropout_rate,
-                use_batch_norm=self.use_batch_norm,
-            ).to(self.device)
-        else:
-            raise ValueError(
-                f"Unknown model type: {self.model_type}, expected 'mlp' or 'resnet'"
-            )
         # Load the model state
         self.vf.load_state_dict(torch.load(path))
         self.vf.to(self.device)
@@ -330,3 +307,197 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
         self.vf.eval()
         self.wrapped_vf.eval()
         self.solver.eval()
+
+
+class FlowMatchingDistiller(BaseAnomalyDetector):
+    """distillation model for Flow Matching.
+    This model will be trained on the pair (inputs, flow matching anomaly scores)
+    The base model is again MLP/ResNet.
+    No time input, only the input data.
+    The model is trained to predict the flow matching anomaly score.
+
+    Args:
+        BaseAnomalyDetector (_type_): _description_
+    """
+
+    def __init__(
+        self,
+        input_dim=2,
+        output_dim=1,
+        hidden_dim=128,
+        model_type="mlp",
+        num_layers=4,
+        dropout_rate=0.0,
+        use_batch_norm=False,
+        lr=0.001,
+        batch_size=4096,
+        iterations=20000,
+        print_every=2000,
+        device=None,
+    ):
+        """
+        Initialize the Flow Matching distillation model.
+
+        Args:
+            input_dim: Dimension of input data
+            hidden_dim: Hidden dimension of the MLP
+            model_type: Type of model to use ('mlp' or 'resnet')
+            num_layers: Number of layers/blocks in the model
+            dropout_rate: Dropout rate (0.0 means no dropout)
+            use_batch_norm: Whether to use batch normalization
+            lr: Learning rate for optimizer
+            batch_size: Batch size for training
+            iterations: Number of training iterations
+            print_every: Log frequency during training
+            device: Device to use for computation
+        """
+        # Model parameters
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+        self.hidden_dim = hidden_dim
+        self.model_type = model_type.lower()
+        self.num_layers = num_layers
+        self.dropout_rate = dropout_rate
+        self.use_batch_norm = use_batch_norm
+
+        # Training parameters
+        self.lr = lr
+        self.batch_size = batch_size
+        self.iterations = iterations
+        self.print_every = print_every
+        self.loss_function = torch.nn.MSELoss()
+
+        # Initialize device
+        self.device = (
+            device if device else ("cuda" if torch.cuda.is_available() else "cpu")
+        )
+
+        # Initialize model based on model_type
+        if self.model_type == "mlp":
+            self.model = MLP(
+                input_dim=self.input_dim,
+                output_dim=self.output_dim,
+                time_dim=0,
+                hidden_dim=self.hidden_dim,
+                num_layers=self.num_layers,
+                dropout_rate=self.dropout_rate,
+                use_batch_norm=self.use_batch_norm,
+            ).to(self.device)
+        elif self.model_type == "resnet":
+            self.model = ResNet(
+                input_dim=self.input_dim,
+                output_dim=self.output_dim,
+                time_dim=0,
+                hidden_dim=self.hidden_dim,
+                num_blocks=self.num_layers,
+                dropout_rate=self.dropout_rate,
+                use_batch_norm=self.use_batch_norm,
+            ).to(self.device)
+        else:
+            raise ValueError(
+                f"Unknown model type: {self.model_type}, expected 'mlp' or 'resnet'"
+            )
+
+    def fit(self, X: np.ndarray, scores: np.ndarray, **kwargs) -> None:
+        """
+        Fit the Flow Matching distillation model to the training data.
+
+        Args:
+            X: Training data of shape (n_samples, n_features)
+            scores: Anomaly scores from Flow Matching of shape (n_samples,)
+            **kwargs: Additional model-specific parameters
+        """
+        # Override parameters if provided in kwargs
+        for key, value in kwargs.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
+
+        # Convert data to torch tensor and move to device
+        X_tensor = torch.tensor(X, dtype=torch.float32).to(self.device)
+        scores_tensor = torch.tensor(scores, dtype=torch.float32).to(self.device)
+
+        # Optimizer
+        optim = torch.optim.Adam(self.model.parameters(), lr=self.lr)
+
+        # Training loop
+        start_time = time.time()
+        for i in range(self.iterations):
+            optim.zero_grad()
+
+            # Sample batch from data
+            batch_indices = torch.randint(0, X_tensor.shape[0], (self.batch_size,))
+            x_batch = (
+                X_tensor[batch_indices]
+                if self.batch_size < X_tensor.shape[0]
+                else X_tensor
+            )
+            y_batch = (
+                scores_tensor[batch_indices]
+                if self.batch_size < scores_tensor.shape[0]
+                else scores_tensor
+            )
+
+            # Forward pass
+            y_pred = self.model(x_batch)
+
+            # Loss calculation (L2 loss)
+            loss = self.loss_function(y_pred, y_batch)
+
+            # Backward pass and optimization
+            loss.backward()
+            optim.step()
+
+            # Log loss
+            if (i + 1) % self.print_every == 0:
+                elapsed = time.time() - start_time
+                print(
+                    "| iter {:6d} | {:5.2f} ms/step | loss {:8.3f} ".format(
+                        i + 1, elapsed * 1000 / self.print_every, loss.item()
+                    )
+                )
+                start_time = time.time()
+
+    def predict(self, X, **kwargs):
+        self.model.eval()
+        # Convert data to torch tensor and move to device
+        X_tensor = torch.tensor(X, dtype=torch.float32).to(self.device)
+
+        batch_size = 10000
+        if X_tensor.shape[0] > batch_size:
+            # Initialize storage for all anomaly scores
+            anomalies = torch.zeros_like(X_tensor[:, 0]).view(-1, 1)
+            # Process in batches
+            for i in range(0, X_tensor.shape[0], batch_size):
+                end_idx = min(i + batch_size, X_tensor.shape[0])
+                batch = X_tensor[i:end_idx]
+
+                # Forward pass
+                y_pred = self.model(batch)
+                # Store the results
+                anomalies[i:end_idx] = y_pred
+        else:
+            # For smaller datasets, process all at once
+            with torch.no_grad():
+                anomalies = self.model(X_tensor)
+        # Convert to numpy
+        return anomalies.detach().cpu().numpy()
+
+    def save(self, path: str) -> None:
+        """
+        Save the model to a file.
+        """
+
+        # Save the model state
+        torch.save(self.model.state_dict(), path)
+        print(f"Model saved to {path}")
+
+    def load(self, path: str) -> None:
+        """
+        Load the model from a file.
+        """
+        # Load the model state
+        self.model.load_state_dict(torch.load(path))
+        self.model.to(self.device)
+        print(f"Model loaded from {path}")
+        # Ensure the model is in evaluation mode
+        self.model.eval()

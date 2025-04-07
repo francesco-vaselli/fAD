@@ -41,6 +41,7 @@ class MLP(nn.Module):
     def __init__(
         self,
         input_dim: int = 2,
+        output_dim=None,
         time_dim: int = 1,
         hidden_dim: int = 128,
         num_layers: int = 4,
@@ -50,6 +51,7 @@ class MLP(nn.Module):
         super().__init__()
 
         self.input_dim = input_dim
+        self.output_dim = output_dim if output_dim is not None else input_dim
         self.time_dim = time_dim
         self.hidden_dim = hidden_dim
 
@@ -68,20 +70,27 @@ class MLP(nn.Module):
                 layers.append(nn.Dropout(dropout_rate))
 
         # Output layer
-        layers.append(nn.Linear(hidden_dim, input_dim))
+        layers.append(nn.Linear(hidden_dim, self.output_dim))
 
         self.main = nn.Sequential(*layers)
 
-    def forward(self, x: Tensor, t: Tensor) -> Tensor:
+    def forward(self, x: Tensor, t: Tensor = None) -> Tensor:
         sz = x.size()
         x = x.reshape(-1, self.input_dim)
-        t = t.reshape(-1, self.time_dim).float()
+        if t is not None:
+            t = t.reshape(-1, self.time_dim).float()
 
-        t = t.reshape(-1, 1).expand(x.shape[0], 1)
-        h = torch.cat([x, t], dim=1)
+            t = t.reshape(-1, 1).expand(x.shape[0], 1)
+            h = torch.cat([x, t], dim=1)
+        else:
+            h = x
         output = self.main(h)
+        if self.output_dim == self.input_dim:
+            output = output.reshape(*sz)
+        else:
+            output = output.reshape(sz[0], self.output_dim)
 
-        return output.reshape(*sz)
+        return output
 
 
 # ResNet model class
@@ -89,6 +98,7 @@ class ResNet(nn.Module):
     def __init__(
         self,
         input_dim: int = 2,
+        output_dim=None,
         time_dim: int = 1,
         hidden_dim: int = 128,
         num_blocks: int = 4,
@@ -98,6 +108,7 @@ class ResNet(nn.Module):
         super().__init__()
 
         self.input_dim = input_dim
+        self.output_dim = output_dim if output_dim is not None else input_dim
         self.time_dim = time_dim
         self.hidden_dim = hidden_dim
 
@@ -115,16 +126,18 @@ class ResNet(nn.Module):
         )
 
         # Output projection
-        self.output_proj = nn.Linear(hidden_dim, input_dim)
+        self.output_proj = nn.Linear(hidden_dim, self.output_dim)
 
-    def forward(self, x: Tensor, t: Tensor) -> Tensor:
+    def forward(self, x: Tensor, t: Tensor = None) -> Tensor:
         sz = x.size()
         x = x.reshape(-1, self.input_dim)
-        t = t.reshape(-1, self.time_dim).float()
+        if t is not None:
+            t = t.reshape(-1, self.time_dim).float()
 
-        t = t.reshape(-1, 1).expand(x.shape[0], 1)
-        h = torch.cat([x, t], dim=1)
-
+            t = t.reshape(-1, 1).expand(x.shape[0], 1)
+            h = torch.cat([x, t], dim=1)
+        else:
+            h = x
         # Input projection
         h = self.input_proj(h)
 
@@ -134,5 +147,9 @@ class ResNet(nn.Module):
 
         # Output projection
         output = self.output_proj(h)
+        if self.output_dim == self.input_dim:
+            output = output.reshape(*sz)
+        else:
+            output = output.reshape(sz[0], self.output_dim)
 
-        return output.reshape(*sz)
+        return
