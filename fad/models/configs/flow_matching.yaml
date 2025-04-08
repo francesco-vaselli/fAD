@@ -1,12 +1,12 @@
 # a config file for flow matching model 
 input_dim: 76
-hidden_dim: 128
+hidden_dim: 32
 model_type: mlp
 num_layers: 4
 dropout_rate: 0.0
 use_batch_norm: false
 lr: 0.001
-batch_size: 128
-iterations: 1000
-print_every: 50
+batch_size: 32
+iterations: 20
+print_every: 1
 device: null

@@ -127,6 +127,9 @@ class ResNet(nn.Module):
 
         # Output projection
         self.output_proj = nn.Linear(hidden_dim, self.output_dim)
+        print(
+            f"ResNet with input_dim={input_dim}, output_dim={output_dim}, time_dim={time_dim}, hidden_dim={hidden_dim}, num_blocks={num_blocks}"
+        )
 
     def forward(self, x: Tensor, t: Tensor = None) -> Tensor:
         sz = x.size()
@@ -140,16 +143,16 @@ class ResNet(nn.Module):
             h = x
         # Input projection
         h = self.input_proj(h)
-
         # Apply residual blocks
         for block in self.blocks:
             h = block(h)
 
         # Output projection
         output = self.output_proj(h)
+
         if self.output_dim == self.input_dim:
             output = output.reshape(*sz)
         else:
             output = output.reshape(sz[0], self.output_dim)
 
-        return
+        return output

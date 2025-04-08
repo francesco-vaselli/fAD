@@ -125,33 +125,29 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
         # Training loop
         start_time = time.time()
         for i in range(self.iterations):
-            optim.zero_grad()
+            total_batches = X_tensor.shape[0] // self.batch_size
+            for j in range(total_batches):
+                optim.zero_grad()
+                # Sample batch from data
+                batch = X_tensor[j * self.batch_size : (j + 1) * self.batch_size]
+                x_1 = batch
+                # Sample from Gaussian prior
+                x_0 = torch.randn_like(x_1).to(self.device)
 
-            # Sample batch from data
-            batch_indices = torch.randint(0, X_tensor.shape[0], (self.batch_size,))
-            x_1 = (
-                X_tensor[batch_indices]
-                if self.batch_size < X_tensor.shape[0]
-                else X_tensor
-            )
+                # Sample time
+                t = torch.rand(x_1.shape[0]).to(self.device)
 
-            # Sample from Gaussian prior
-            x_0 = torch.randn_like(x_1).to(self.device)
+                # Sample probability path
+                path_sample = path.sample(t=t, x_0=x_0, x_1=x_1)
 
-            # Sample time
-            t = torch.rand(x_1.shape[0]).to(self.device)
+                # Flow matching L2 loss
+                loss = torch.pow(
+                    self.vf(path_sample.x_t, path_sample.t) - path_sample.dx_t, 2
+                ).mean()
 
-            # Sample probability path
-            path_sample = path.sample(t=t, x_0=x_0, x_1=x_1)
-
-            # Flow matching L2 loss
-            loss = torch.pow(
-                self.vf(path_sample.x_t, path_sample.t) - path_sample.dx_t, 2
-            ).mean()
-
-            # Optimizer step
-            loss.backward()
-            optim.step()
+                # Optimizer step
+                loss.backward()
+                optim.step()
 
             # Log loss
             if (i + 1) % self.print_every == 0:
@@ -163,21 +159,8 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
                 )
                 start_time = time.time()
 
-        # Wrap the model for the solver
-        self.wrapped_vf = WrappedModel(self.vf)
-        self.solver = ODESolver(velocity_model=self.wrapped_vf)
-
-        # Initialize Gaussian distribution for scoring
-        self.gaussian = Independent(
-            Normal(
-                torch.zeros(self.input_dim, device=self.device),
-                torch.ones(self.input_dim, device=self.device),
-            ),
-            1,
-        )
-
     def predict(
-        self, X: np.ndarray, step_size=0.05, mode: str = "ODE", **kwargs
+        self, X: np.ndarray, time_steps=100, step_size=0.05, mode: str = "ODE", **kwargs
     ) -> tuple:
         """
         Predict anomaly scores for the input data.
@@ -203,11 +186,21 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
         X_tensor = torch.tensor(X, dtype=torch.float32).to(self.device)
 
         if mode.lower() == "ode":
-            if self.solver is None:
-                raise ValueError("ODE solver not initialized. Call fit() first.")
+            # Wrap the model for the solver
+            self.wrapped_vf = WrappedModel(self.vf)
+            self.solver = ODESolver(velocity_model=self.wrapped_vf)
 
-            # Set up reverse time grid (from 1 to 0)
-            T = torch.tensor([1.0, 0.0], device=self.device)
+            # Initialize Gaussian distribution for scoring
+            self.gaussian = Independent(
+                Normal(
+                    torch.zeros(self.input_dim, device=self.device),
+                    torch.ones(self.input_dim, device=self.device),
+                ),
+                1,
+            )
+
+            # Set up reverse time grid (from 1 to 0) of len(time_steps)
+            T = torch.linspace(1.0, 0.0, time_steps, device=self.device)
 
             # Transform data to Gaussian space by solving the ODE in reverse
             with torch.no_grad():
@@ -226,7 +219,7 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
                         gaussian_batch = self.solver.sample(
                             time_grid=T,
                             x_init=batch,
-                            method="midpoint",
+                            method="euler",
                             step_size=step_size,
                             return_intermediates=False,
                         )
@@ -242,7 +235,7 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
                     gaussian_samples = self.solver.sample(
                         time_grid=T,
                         x_init=X_tensor,
-                        method="midpoint",
+                        method="euler",
                         step_size=step_size,
                         return_intermediates=False,
                     )
@@ -264,7 +257,7 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
         elif mode.lower() == "vt":
             # Direct vector field evaluation at t=1
             with torch.no_grad():
-                t = torch.zeros(X_tensor.shape[0], device=self.device)
+                t = torch.ones(X_tensor.shape[0], device=self.device)
                 # Get vector field at t=1
                 vector_field = self.vf(X_tensor, t)
                 # Use the magnitude of the vector field as anomaly score
@@ -275,6 +268,101 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
             raise ValueError(f"Unknown mode: {mode}, expected 'ODE' or 'vt'")
 
         return anomaly_scores, transformed_data
+
+    def return_trajectories(
+        self, X: np.ndarray, time_steps=100, step_size=0.05, mode: str = "ODE", **kwargs
+    ):
+        """similar to predict, but return the trajectories of the data points from data to gaussian instead of the anomaly scores
+
+        Args:
+            X (np.ndarray): _description_
+            step_size (float, optional): _description_. Defaults to 0.05.
+            mode (str, optional): _description_. Defaults to "ODE".
+
+        """
+        if self.vf is None:
+            raise ValueError("Model has not been trained. Call fit() first.")
+        # Convert data to torch tensor and move to device
+        X_tensor = torch.tensor(X, dtype=torch.float32).to(self.device)
+        if mode.lower() == "ode":
+            # Wrap the model for the solver
+            # Wrap the model for the solver
+            self.wrapped_vf = WrappedModel(self.vf)
+            self.solver = ODESolver(velocity_model=self.wrapped_vf)
+
+            # Initialize Gaussian distribution for scoring
+            self.gaussian = Independent(
+                Normal(
+                    torch.zeros(self.input_dim, device=self.device),
+                    torch.ones(self.input_dim, device=self.device),
+                ),
+                1,
+            )
+
+            # Set up reverse time grid (from 1 to 0)
+            T = torch.linspace(1.0, 0.0, time_steps, device=self.device)
+
+            # Transform data to Gaussian space by solving the ODE in reverse
+            with torch.no_grad():
+                # Process in batches if data is large
+                batch_size = 10000
+                if X_tensor.shape[0] > batch_size:
+                    # Initialize storage for all Gaussian samples
+                    x_gaussian_traj = torch.zeros(
+                        (T.shape[0], X_tensor.shape[0], X_tensor.shape[1]),
+                        device=self.device,
+                    )
+
+                    # Process in batches
+                    for i in range(0, X_tensor.shape[0], batch_size):
+                        end_idx = min(i + batch_size, X_tensor.shape[0])
+                        batch = X_tensor[i:end_idx]
+
+                        # Solve the ODE for this batch
+                        gaussian_batch = self.solver.sample(
+                            time_grid=T,
+                            x_init=batch,
+                            method="midpoint",
+                            step_size=step_size,
+                            return_intermediates=True,
+                        )
+
+                        # Store the results
+                        x_gaussian_traj[i:end_idx] = (
+                            gaussian_batch[-1]
+                            if isinstance(gaussian_batch, list)
+                            else gaussian_batch
+                        )
+                else:
+                    # For smaller datasets, process all at once
+                    gaussian_samples = self.solver.sample(
+                        time_grid=T,
+                        x_init=X_tensor,
+                        method="midpoint",
+                        step_size=step_size,
+                        return_intermediates=True,
+                    )
+                    print(gaussian_samples.shape)
+
+                    # The samples are at t=0 (Gaussian space)
+                    x_gaussian_traj = (
+                        gaussian_samples[-1]
+                        if isinstance(gaussian_samples, list)
+                        else gaussian_samples
+                    )
+        return x_gaussian_traj.cpu().numpy()
+
+    def return_all_vts(
+        self, X: np.ndarray, time_steps=100, step_size=0.05, mode: str = "ODE", **kwargs
+    ):
+        """return all the vector fields of the data points from data to gaussian instead of the anomaly scores along the trajectory
+
+        Args:
+            X (np.ndarray): _description_
+            time_steps (int, optional): _description_. Defaults to 100.
+            step_size (float, optional): _description_. Defaults to 0.05.
+            mode (str, optional): _description_. Defaults to "ODE".
+        """
 
     def save(self, path: str) -> None:
         """
@@ -412,6 +500,7 @@ class FlowMatchingDistiller(BaseAnomalyDetector):
             if hasattr(self, key):
                 setattr(self, key, value)
 
+        print(f"Training distillation model with {self.model_type}...")
         # Convert data to torch tensor and move to device
         X_tensor = torch.tensor(X, dtype=torch.float32).to(self.device)
         scores_tensor = torch.tensor(scores, dtype=torch.float32).to(self.device)
@@ -439,7 +528,6 @@ class FlowMatchingDistiller(BaseAnomalyDetector):
 
             # Forward pass
             y_pred = self.model(x_batch)
-
             # Loss calculation (L2 loss)
             loss = self.loss_function(y_pred, y_batch)
 
@@ -451,7 +539,7 @@ class FlowMatchingDistiller(BaseAnomalyDetector):
             if (i + 1) % self.print_every == 0:
                 elapsed = time.time() - start_time
                 print(
-                    "| iter {:6d} | {:5.2f} ms/step | loss {:8.3f} ".format(
+                    "| iter {:6d} | {:5.2f} ms/step | loss {:8.5f} ".format(
                         i + 1, elapsed * 1000 / self.print_every, loss.item()
                     )
                 )
