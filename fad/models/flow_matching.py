@@ -103,12 +103,13 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
                 f"Unknown model type: {self.model_type}, expected 'mlp' or 'resnet'"
             )
 
-    def fit(self, X: np.ndarray, **kwargs) -> None:
+    def fit(self, X: np.ndarray, mode="OT", **kwargs) -> None:
         """
         Fit the Flow Matching model to the training data.
 
         Args:
             X: Training data of shape (n_samples, n_features)
+            mode: the type of loss to use; "OT" for optimal transport loss, "rectified" for rectified loss
             **kwargs: Additional model-specific parameters
         """
         # Override parameters if provided in kwargs
@@ -141,9 +142,15 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
                 path_sample = path.sample(t=t, x_0=x_0, x_1=x_1)
 
                 # Flow matching L2 loss
-                loss = torch.pow(
-                    self.vf(path_sample.x_t, path_sample.t) - path_sample.dx_t, 2
-                ).mean()
+                # mode can be "OT" or "rectified"
+                if mode == "OT":
+                    loss = torch.pow(
+                        self.vf(path_sample.x_t, path_sample.t) - path_sample.dx_t, 2
+                    ).mean()
+                elif mode == "rectified":
+                    loss = torch.pow(
+                        (self.vf(path_sample.x_t, path_sample.t) + x_0 - x_1), 2
+                    ).mean()
 
                 # Optimizer step
                 loss.backward()
@@ -270,7 +277,13 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
         return anomaly_scores, transformed_data
 
     def return_trajectories(
-        self, X: np.ndarray, time_steps=100, step_size=0.05, mode: str = "ODE", **kwargs
+        self,
+        X: np.ndarray,
+        time_steps=100,
+        step_size=0.05,
+        mode: str = "ODE",
+        return_vts=False,
+        **kwargs,
     ):
         """similar to predict, but return the trajectories of the data points from data to gaussian instead of the anomaly scores
 
@@ -312,6 +325,11 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
                         (T.shape[0], X_tensor.shape[0], X_tensor.shape[1]),
                         device=self.device,
                     )
+                    if return_vts:
+                        vts = torch.zeros(
+                            (T.shape[0], X_tensor.shape[0], X_tensor.shape[1]),
+                            device=self.device,
+                        )
 
                     # Process in batches
                     for i in range(0, X_tensor.shape[0], batch_size):
@@ -322,7 +340,7 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
                         gaussian_batch = self.solver.sample(
                             time_grid=T,
                             x_init=batch,
-                            method="midpoint",
+                            method="euler",
                             step_size=step_size,
                             return_intermediates=True,
                         )
@@ -338,7 +356,7 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
                     gaussian_samples = self.solver.sample(
                         time_grid=T,
                         x_init=X_tensor,
-                        method="midpoint",
+                        method="euler",
                         step_size=step_size,
                         return_intermediates=True,
                     )
