@@ -1,6 +1,7 @@
 */ad_challenge/*
 *.png
 *.h5
+/experiments/model_*
 
 # Python
 __pycache__/

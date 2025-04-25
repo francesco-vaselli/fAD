@@ -6,7 +6,13 @@ num_layers: 4
 dropout_rate: 0.0
 use_batch_norm: false
 lr: 0.001
-batch_size: 32
-iterations: 20
+batch_size: 1024
+reflow_steps: 3
+reflow_batches: 50
+iterations: 5
 print_every: 1
 device: null
+
+# some notes on the best configs
+# bs=32 and 5 steps is what I did in the hackathon
+# bs=1024 and 20 steps is what gives good results now, when training in "rectified" mode AND sampling with 1 timestep

@@ -34,6 +34,8 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
         use_batch_norm=False,
         lr=0.001,
         batch_size=4096,
+        reflow_steps=10,
+        reflow_batches=100,
         iterations=20000,
         print_every=2000,
         device=None,
@@ -65,6 +67,8 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
         # Training parameters
         self.lr = lr
         self.batch_size = batch_size
+        self.reflow_steps = reflow_steps
+        self.reflow_batches = reflow_batches
         self.iterations = iterations
         self.print_every = print_every
 
@@ -103,7 +107,7 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
                 f"Unknown model type: {self.model_type}, expected 'mlp' or 'resnet'"
             )
 
-    def fit(self, X: np.ndarray, mode="OT", **kwargs) -> None:
+    def fit(self, X: np.ndarray, mode="OT", reflow: bool = False, **kwargs) -> None:
         """
         Fit the Flow Matching model to the training data.
 
@@ -166,8 +170,100 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
                 )
                 start_time = time.time()
 
+        # if reflow and mode == "rectified":
+        #     # Reflow the model
+        #     for j in range(self.reflow_steps):
+        #         # save the current model
+        #         self.save(f"reflow_{j}.pt")
+        #         # load the model
+        #         self.load(f"reflow_{j}.pt")
+        #         old_model = self.vf
+        #         loss = 0
+        #         for k in range(self.reflow_batches):
+        #             optim.zero_grad()
+        #             # sample batch from model
+        #             batch = old_model.sample(self.batch_size)
+        #             x_1 = batch
+        #             # sample from Gaussian prior
+        #             x_0 = torch.randn_like(x_1).to(self.device)
+        #             # sample time
+        #             t = torch.rand(x_1.shape[0]).to(self.device)
+        #             # sample probability path
+        #             path_sample = path.sample(t=t, x_0=x_0, x_1=x_1)
+        #             # rectified loss
+        #             loss = torch.pow(
+        #                 (self.vf(path_sample.x_t, path_sample.t) + x_0 - x_1), 2
+        #             ).mean()
+        #             # optimizer step
+        #             loss.backward()
+        #             optim.step()
+        #             loss += loss.item()
+
+        #         # log loss every reflow_step
+        #         print(
+        #             "| reflow iter {:6d} | {:5.2f} ms/step | loss {:8.3f} ".format(
+        #                 j + 1,
+        #                 elapsed * 1000 / self.print_every,
+        #                 loss.item() / (self.reflow_batches + 1),  # average loss
+        #             )
+        #         )
+
+    def sample(
+        self,
+        batch_size: np.ndarray,
+        time_steps=100,
+        step_size=0.05,
+        solver: str = "euler",
+        **kwargs,
+    ) -> tuple:
+        """ """
+        if self.vf is None:
+            raise ValueError("Model has not been trained. Call fit() first.")
+
+        # Wrap the model for the solver
+        self.wrapped_vf = WrappedModel(self.vf)
+        self.solver = ODESolver(velocity_model=self.wrapped_vf)
+
+        # Initialize Gaussian distribution for scoring
+        self.gaussian = Independent(
+            Normal(
+                torch.zeros(self.input_dim, device=self.device),
+                torch.ones(self.input_dim, device=self.device),
+            ),
+            1,
+        )
+
+        # Set up reverse time grid (from 1 to 0) of len(time_steps)
+        T = torch.linspace(0.0, 1.0, time_steps, device=self.device)
+
+        # Transform data to Gaussian space by solving the ODE in reverse
+        with torch.no_grad():
+            # Process in batches if data is large
+            data_samples = self.solver.sample(
+                time_grid=T,
+                x_init=self.gaussian.sample((batch_size,)).to(self.device),
+                method=solver,
+                step_size=step_size,
+                return_intermediates=False,
+            )
+
+            x_sampled = (
+                data_samples[-1] if isinstance(data_samples, list) else data_samples
+            )
+
+        x_sampled = x_sampled.cpu().numpy()
+
+        return x_sampled
+
     def predict(
-        self, X: np.ndarray, time_steps=100, step_size=0.05, mode: str = "ODE", **kwargs
+        self,
+        X: np.ndarray,
+        time_steps=100,
+        step_size=0.05,
+        mode: str = "ODE",
+        log_density_calc: str = "manual",
+        return_transformed_data=False,
+        **kwargs,
     ) -> tuple:
         """
         Predict anomaly scores for the input data.
@@ -208,58 +304,91 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
 
             # Set up reverse time grid (from 1 to 0) of len(time_steps)
             T = torch.linspace(1.0, 0.0, time_steps, device=self.device)
+            print(f"time grid: {T}")
 
             # Transform data to Gaussian space by solving the ODE in reverse
             with torch.no_grad():
                 # Process in batches if data is large
                 batch_size = 10000
-                if X_tensor.shape[0] > batch_size:
-                    # Initialize storage for all Gaussian samples
-                    x_gaussian = torch.zeros_like(X_tensor)
+                if log_density_calc == "library":
+                    if X_tensor.shape[0] > batch_size:
+                        log_density = torch.zeros_like(X_tensor[:, 0])  # .view(-1, 1)
+                        for i in range(0, X_tensor.shape[0], batch_size):
+                            end_idx = min(i + batch_size, X_tensor.shape[0])
+                            batch = X_tensor[i:end_idx]
+                            _, exact_log_p = self.solver.compute_likelihood(
+                                x_1=batch,
+                                method="midpoint",
+                                step_size=step_size,
+                                exact_divergence=False,
+                                log_p0=self.gaussian.log_prob,
+                            )
+                            log_density[i:end_idx] = exact_log_p
+                    else:
+                        # For smaller datasets, process all at once
+                        _, exact_log_p = self.solver.compute_likelihood(
+                            x_1=X_tensor,
+                            method="midpoint",
+                            step_size=step_size,
+                            exact_divergence=False,
+                            log_p0=self.gaussian.log_prob,
+                        )
+                        log_density = exact_log_p
+                    if return_transformed_data:
+                        raise (
+                            ValueError(
+                                "return_transformed_data is not supported for log_density_calc = library"
+                            )
+                        )
 
-                    # Process in batches
-                    for i in range(0, X_tensor.shape[0], batch_size):
-                        end_idx = min(i + batch_size, X_tensor.shape[0])
-                        batch = X_tensor[i:end_idx]
+                if log_density_calc == "manual":
+                    if X_tensor.shape[0] > batch_size:
+                        # Initialize storage for all Gaussian samples
+                        x_gaussian = torch.zeros_like(X_tensor)
 
-                        # Solve the ODE for this batch
-                        gaussian_batch = self.solver.sample(
+                        # Process in batches
+                        for i in range(0, X_tensor.shape[0], batch_size):
+                            end_idx = min(i + batch_size, X_tensor.shape[0])
+                            batch = X_tensor[i:end_idx]
+
+                            # Solve the ODE for this batch
+                            gaussian_batch = self.solver.sample(
+                                time_grid=T,
+                                x_init=batch,
+                                method="euler",
+                                step_size=step_size,
+                                return_intermediates=False,
+                            )
+
+                            # Store the results
+                            x_gaussian[i:end_idx] = (
+                                gaussian_batch[-1]
+                                if isinstance(gaussian_batch, list)
+                                else gaussian_batch
+                            )
+                    else:
+                        # For smaller datasets, process all at once
+                        gaussian_samples = self.solver.sample(
                             time_grid=T,
-                            x_init=batch,
+                            x_init=X_tensor,
                             method="euler",
                             step_size=step_size,
                             return_intermediates=False,
                         )
 
-                        # Store the results
-                        x_gaussian[i:end_idx] = (
-                            gaussian_batch[-1]
-                            if isinstance(gaussian_batch, list)
-                            else gaussian_batch
+                        # The samples are at t=0 (Gaussian space)
+                        x_gaussian = (
+                            gaussian_samples[-1]
+                            if isinstance(gaussian_samples, list)
+                            else gaussian_samples
                         )
-                else:
-                    # For smaller datasets, process all at once
-                    gaussian_samples = self.solver.sample(
-                        time_grid=T,
-                        x_init=X_tensor,
-                        method="euler",
-                        step_size=step_size,
-                        return_intermediates=False,
-                    )
 
-                    # The samples are at t=0 (Gaussian space)
-                    x_gaussian = (
-                        gaussian_samples[-1]
-                        if isinstance(gaussian_samples, list)
-                        else gaussian_samples
-                    )
-
-            # Calculate log density in Gaussian space
-            log_density = self.gaussian.log_prob(x_gaussian)
+                    # Calculate log density in Gaussian space
+                    log_density = self.gaussian.log_prob(x_gaussian)
+                    transformed_data = x_gaussian.cpu().numpy()
 
             # Anomaly score is negative log density (lower density = higher anomaly score)
             anomaly_scores = -log_density.cpu().numpy()
-            transformed_data = x_gaussian.cpu().numpy()
 
         elif mode.lower() == "vt":
             # Direct vector field evaluation at t=1
@@ -270,11 +399,17 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
                 # Use the magnitude of the vector field as anomaly score
                 # Higher magnitude indicates more displacement needed, suggesting anomaly
                 anomaly_scores = torch.norm(vector_field, dim=1).cpu().numpy()
-                transformed_data = X_tensor.cpu().numpy()
+                if return_transformed_data:
+                    raise ValueError(
+                        "return_transformed_data is not supported for mode vt"
+                    )
         else:
             raise ValueError(f"Unknown mode: {mode}, expected 'ODE' or 'vt'")
 
-        return anomaly_scores, transformed_data
+        if return_transformed_data:
+            return anomaly_scores, transformed_data
+        else:
+            return anomaly_scores
 
     def return_trajectories(
         self,

@@ -118,7 +118,12 @@ def _load_npz_dataset(path: str, **kwargs) -> Dataset:
 
 
 def _load_h5_challenge_dataset(
-    path_bkg: str, path_anom: str, n_train: int, n_test: int, **kwargs
+    path_bkg: str,
+    path_anom: str,
+    n_train: int,
+    n_test: int,
+    discard_type_idx: bool = True,
+    **kwargs,
 ) -> Dataset:
     """Load dataset from a HDF5 file."""
 
@@ -128,6 +133,13 @@ def _load_h5_challenge_dataset(
     # limit to 100k events for now
     x_bkg = data_bkg["Particles"][: n_train + n_test]
     x_anom = data_anom["Particles"][:n_test]
+    # discard the type index
+    if discard_type_idx:
+        x_bkg = x_bkg[:, :, 0:3]
+        x_anom = x_anom[:, :, 0:3]
+        print(
+            f"Discarding type index, shape bkg: {x_bkg.shape}, shape anom: {x_anom.shape}"
+        )
     # shape is (n_events, n_part, n_features), we flatten the last two dimensions
     x_bkg = x_bkg.reshape(x_bkg.shape[0], -1)
     x_anom = x_anom.reshape(x_anom.shape[0], -1)
