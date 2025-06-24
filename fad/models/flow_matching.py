@@ -8,7 +8,15 @@ from flow_matching.solver import ODESolver
 from flow_matching.utils import ModelWrapper
 
 from .base import BaseAnomalyDetector
-from .NNs import MLP, ResNet
+from .NNs import (
+    MLP,
+    ResNet,
+    fast_MLP,
+    MLP_wrapper_with_einsum,
+    MLP_wrapper,
+    MLP_wrapper_with_sum,
+)
+from ..validation.metrics import evaluate_performance
 
 
 class WrappedModel(ModelWrapper):
@@ -30,6 +38,7 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
         hidden_dim=128,
         model_type="mlp",
         num_layers=4,
+        list_dims=None,
         dropout_rate=0.0,
         use_batch_norm=False,
         lr=0.001,
@@ -39,6 +48,8 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
         iterations=20000,
         print_every=2000,
         device=None,
+        alpha=1,
+        name="null",
     ):
         """
         Initialize the Flow Matching anomaly detector.
@@ -76,6 +87,7 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
         self.device = (
             device if device else ("cuda" if torch.cuda.is_available() else "cpu")
         )
+        self.alpha = alpha
 
         # Model components
         self.vf = None
@@ -92,6 +104,7 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
                 num_layers=self.num_layers,
                 dropout_rate=self.dropout_rate,
                 use_batch_norm=self.use_batch_norm,
+                list_dims=list_dims,
             ).to(self.device)
         elif self.model_type == "resnet":
             self.vf = ResNet(
@@ -106,8 +119,16 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
             raise ValueError(
                 f"Unknown model type: {self.model_type}, expected 'mlp' or 'resnet'"
             )
+        self.name = name
 
-    def fit(self, X: np.ndarray, mode="OT", reflow: bool = False, **kwargs) -> None:
+    def fit(
+        self,
+        X: np.ndarray,
+        mode="OT",
+        reflow: bool = False,
+        eval_epochs=[5, 20, 100],
+        **kwargs,
+    ) -> None:
         """
         Fit the Flow Matching model to the training data.
 
@@ -130,6 +151,7 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
         # Training loop
         start_time = time.time()
         for i in range(self.iterations):
+            self.vf.train()
             total_batches = X_tensor.shape[0] // self.batch_size
             for j in range(total_batches):
                 optim.zero_grad()
@@ -140,7 +162,9 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
                 x_0 = torch.randn_like(x_1).to(self.device)
 
                 # Sample time
-                t = torch.rand(x_1.shape[0]).to(self.device)
+                t = torch.pow(torch.rand(x_0.shape[0]), 1 / (1 + self.alpha)).type_as(
+                    x_0
+                )
 
                 # Sample probability path
                 path_sample = path.sample(t=t, x_0=x_0, x_1=x_1)
@@ -169,6 +193,10 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
                     )
                 )
                 start_time = time.time()
+
+            if (i + 1) in eval_epochs:
+                print("SELF NAME", self.name)
+                evaluate_performance(self, self.name, ".", i + 1, **kwargs)
 
         # if reflow and mode == "rectified":
         #     # Reflow the model
@@ -403,6 +431,20 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
                     raise ValueError(
                         "return_transformed_data is not supported for mode vt"
                     )
+        elif mode.lower() == "vt_einsum":
+            with torch.no_grad():
+                t = torch.ones(X_tensor.shape[0], device=self.device)
+                # Get vector field at t=1
+                vector_field = self.vf(X_tensor, t)
+                # Use the magnitude of the vector field as anomaly score
+                # Higher magnitude indicates more displacement needed, suggesting anomaly
+                anomaly_scores = (
+                    torch.einsum("ij,ij->i", vector_field, vector_field).cpu().numpy()
+                )
+                if return_transformed_data:
+                    raise ValueError(
+                        "return_transformed_data is not supported for mode vt"
+                    )
         else:
             raise ValueError(f"Unknown mode: {mode}, expected 'ODE' or 'vt'")
 
@@ -410,6 +452,14 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
             return anomaly_scores, transformed_data
         else:
             return anomaly_scores
+
+    def return_model_for_hls(self, mode="no_reduction"):
+        if mode == "einsum":
+            return MLP_wrapper_with_einsum(self.vf)
+        elif mode == "sum":
+            return MLP_wrapper_with_sum(self.vf)
+        else:
+            return MLP_wrapper(self.vf)
 
     def return_trajectories(
         self,
@@ -504,18 +554,6 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
                         else gaussian_samples
                     )
         return x_gaussian_traj.cpu().numpy()
-
-    def return_all_vts(
-        self, X: np.ndarray, time_steps=100, step_size=0.05, mode: str = "ODE", **kwargs
-    ):
-        """return all the vector fields of the data points from data to gaussian instead of the anomaly scores along the trajectory
-
-        Args:
-            X (np.ndarray): _description_
-            time_steps (int, optional): _description_. Defaults to 100.
-            step_size (float, optional): _description_. Defaults to 0.05.
-            mode (str, optional): _description_. Defaults to "ODE".
-        """
 
     def save(self, path: str) -> None:
         """
