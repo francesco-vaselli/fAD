@@ -16,23 +16,27 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"Using device: {device}")
 
 # 1. Data Loading and Preprocessing
-path_bkg = (
-    "/home/fvaselli/Documents/PHD/fAD/fad/data/ad_challenge/background_for_training.h5"
+path_bkg = "/eos/user/f/fvaselli/fAD/fad/data/ad_challenge/background_for_training.h5"
+path_anom = (
+    "/eos/user/f/fvaselli/fAD/fad/data/ad_challenge/Ato4l_lepFilter_13TeV_filtered.h5"
 )
-path_anom = "/home/fvaselli/Documents/PHD/fAD/fad/data/ad_challenge/Ato4l_lepFilter_13TeV_filtered.h5"
 dataset = _load_h5_challenge_dataset(path_bkg, path_anom, n_train=3500000, n_test=60000)
 
-path_anom2 = "/home/fvaselli/Documents/PHD/fAD/fad/data/ad_challenge/leptoquark_LOWMASS_lepFilter_13TeV_filtered.h5"
+path_anom2 = "/eos/user/f/fvaselli/fAD/fad/data/ad_challenge/leptoquark_LOWMASS_lepFilter_13TeV_filtered.h5"
 dataset2 = _load_h5_challenge_dataset(
     path_bkg, path_anom2, n_train=100000, n_test=400000
 )
 
-path_anom3 = "/home/fvaselli/Documents/PHD/fAD/fad/data/ad_challenge/hToTauTau_13TeV_PU20_filtered.h5"
+path_anom3 = (
+    "/eos/user/f/fvaselli/fAD/fad/data/ad_challenge/hToTauTau_13TeV_PU20_filtered.h5"
+)
 dataset3 = _load_h5_challenge_dataset(
     path_bkg, path_anom3, n_train=100000, n_test=400000
 )
 
-path_anom4 = "/home/fvaselli/Documents/PHD/fAD/fad/data/ad_challenge/hChToTauNu_13TeV_PU20_filtered.h5"
+path_anom4 = (
+    "/eos/user/f/fvaselli/fAD/fad/data/ad_challenge/hChToTauNu_13TeV_PU20_filtered.h5"
+)
 dataset4 = _load_h5_challenge_dataset(
     path_bkg, path_anom4, n_train=100000, n_test=400000
 )
