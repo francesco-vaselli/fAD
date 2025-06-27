@@ -49,22 +49,31 @@ X_test3 = preprocessor.transform(dataset3.test)
 X_test4 = preprocessor.transform(dataset4.test)
 
 # 2. Hyperparameter Search Space
-param_grid = {
-    "hidden_dim": [32],
-    "num_layers": [3],
-    "lr": [0.001, 0.0005],
-    "batch_size": [
-        1024,
-    ],
-    "list_dims": [
-        None,
-    ],
-    "alpha": [0, 1, 5],
+# Experiments with standard MLP (hidden_dim, num_layers)
+param_grid_mlp = {
+    "hidden_dim": [16, 32, 64],
+    "num_layers": [2, 3, 4, 5, 6],
+    "lr": [0.01, 0.001, 0.0005],
+    "batch_size": [256, 1024, 2048],
+    "alpha": [0, 1, 5, 10],
 }
+keys, values = zip(*param_grid_mlp.items())
+experiments_mlp = [dict(zip(keys, v)) for v in itertools.product(*values)]
+for exp in experiments_mlp:
+    exp["list_dims"] = None
 
-# Create all combinations of parameters
-keys, values = zip(*param_grid.items())
-experiments = [dict(zip(keys, v)) for v in itertools.product(*values)]
+# Experiments with custom MLP (list_dims)
+param_grid_custom = {
+    "list_dims": [[32, 64, 32], [32, 128, 32], [128, 128]],
+    "lr": [0.01, 0.001, 0.0005],
+    "batch_size": [256, 1024, 2048],
+    "alpha": [0, 1, 5, 10],
+}
+keys, values = zip(*param_grid_custom.items())
+experiments_custom = [dict(zip(keys, v)) for v in itertools.product(*values)]
+
+# Combine all experiments
+experiments = experiments_mlp + experiments_custom
 
 all_results = []
 best_model_score = -1
@@ -76,17 +85,12 @@ for i, params in enumerate(experiments):
     print(f"--- Experiment {i + 1}/{len(experiments)} ---")
     print(f"Parameters: {params}")
 
-    # Skip if list_dims is present, hidden_dim and num_layers are not needed
-    if params["list_dims"] is not None:
-        params.pop("hidden_dim")
-        params.pop("num_layers")
-
     config_path = "../fad/models/configs/flow_matching.yaml"
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
 
     config.update(params)
-    config["iterations"] = 10
+    config["iterations"] = 100
 
     if config.get("list_dims") is not None:
         list_dims_str = "_".join(map(str, config["list_dims"]))
@@ -108,7 +112,7 @@ for i, params in enumerate(experiments):
         X_train,
         mode="OT",
         reflow=False,
-        eval_epochs=[5, 7, 20, 50, 100],
+        eval_epochs=[5, 20, 50, 100],
         eval_path="hyperparameter_search_results",
         return_results=True,
         X_test=X_test,
