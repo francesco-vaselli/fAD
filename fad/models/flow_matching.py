@@ -48,7 +48,7 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
         iterations=20000,
         print_every=2000,
         device=None,
-        alpha=1,
+        alpha=0,
         name="null",
     ) -> None:
         """

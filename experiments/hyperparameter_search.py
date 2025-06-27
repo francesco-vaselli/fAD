@@ -59,6 +59,7 @@ param_grid = {
     "list_dims": [
         None,
     ],
+    "alpha": [0, 1, 5],
 }
 
 # Create all combinations of parameters
@@ -89,9 +90,9 @@ for i, params in enumerate(experiments):
 
     if config.get("list_dims") is not None:
         list_dims_str = "_".join(map(str, config["list_dims"]))
-        model_name = f"search_{i + 1}_custom_{list_dims_str}_{config['lr']}_{config['batch_size']}"
+        model_name = f"search_{i + 1}_custom_{list_dims_str}_{config['lr']}_{config['batch_size']}_{config['alpha']}"
     else:
-        model_name = f"search_{i + 1}_{config['hidden_dim']}_{config['num_layers']}_{config['lr']}_{config['batch_size']}"
+        model_name = f"search_{i + 1}_{config['hidden_dim']}_{config['num_layers']}_{config['lr']}_{config['batch_size']}_{config['alpha']}"
 
     # drop the "name" field from the config
     config.pop("name")
