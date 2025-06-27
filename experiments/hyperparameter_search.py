@@ -96,6 +96,7 @@ for i, params in enumerate(experiments):
     # drop the "name" field from the config
     config.pop("name")
     config.pop("input_dim")
+    config.pop("device")
 
     flow_matching = FlowMatchingAnomalyDetector(
         input_dim=X_train.shape[1], name=model_name, device=device, **config
