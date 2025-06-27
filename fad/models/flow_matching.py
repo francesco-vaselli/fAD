@@ -50,7 +50,7 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
         device=None,
         alpha=1,
         name="null",
-    ):
+    ) -> None:
         """
         Initialize the Flow Matching anomaly detector.
 
@@ -125,10 +125,11 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
         self,
         X: np.ndarray,
         mode="OT",
+        eval_path=".",
         reflow: bool = False,
         eval_epochs=[5, 20, 100],
         **kwargs,
-    ) -> None:
+    ) -> list:
         """
         Fit the Flow Matching model to the training data.
 
@@ -136,6 +137,9 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
             X: Training data of shape (n_samples, n_features)
             mode: the type of loss to use; "OT" for optimal transport loss, "rectified" for rectified loss
             **kwargs: Additional model-specific parameters
+
+        Returns:
+            list: A list of dictionaries with evaluation results if `return_results=True` is passed in kwargs.
         """
         # Override parameters if provided in kwargs
         for key, value in kwargs.items():
@@ -147,6 +151,8 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
 
         path = AffineProbPath(scheduler=CondOTScheduler())
         optim = torch.optim.Adam(self.vf.parameters(), lr=self.lr)
+
+        all_results = []
 
         # Training loop
         start_time = time.time()
@@ -194,9 +200,15 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
                 )
                 start_time = time.time()
 
-            if (i + 1) in eval_epochs:
-                print("SELF NAME", self.name)
-                evaluate_performance(self, self.name, ".", i + 1, **kwargs)
+                if (i + 1) in eval_epochs:
+                    # eval_path = kwargs.get("path", "experiments")
+                    results = evaluate_performance(
+                        self, self.name, eval_path, i + 1, **kwargs
+                    )
+                    if kwargs.get("return_results"):
+                        all_results.extend(results)
+
+        return all_results
 
         # if reflow and mode == "rectified":
         #     # Reflow the model

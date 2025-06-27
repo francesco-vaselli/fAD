@@ -1,15 +1,16 @@
 # a config file for flow matching model 
-input_dim: 76
-hidden_dim: 32
+name: "32-3-mlp-1024-0.001-50"
+input_dim: 58
+hidden_dim: 32 #was 32 in good results
 model_type: mlp
-num_layers: 4
+num_layers: 3 # was 4 in good results
 dropout_rate: 0.0
 use_batch_norm: false
 lr: 0.001
 batch_size: 1024
 reflow_steps: 3
 reflow_batches: 50
-iterations: 5
+iterations: 50
 print_every: 1
 device: null
 

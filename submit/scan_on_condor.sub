@@ -1,0 +1,10 @@
+executable              = scan_on_condor.sh
+arguments               = "$(FOLDER) $(OTHER)"
+output                  = scan.$(ClusterId).$(ProcId).out
+error                   = scan.$(ClusterId).$(ProcId).err
+log                     = scan.$(ClusterId).log
+should_transfer_files   = NO
+request_GPUs = 1
+request_CPUs = 4
++JobFlavour = "$(FLAVOUR)"
+queue
