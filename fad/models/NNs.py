@@ -1,6 +1,5 @@
 import torch
 from torch import nn, Tensor
-import hls4ml
 
 
 # Activation class
