@@ -29,7 +29,6 @@ from fad.models.flow_matching import FlowMatchingAnomalyDetector
 from fad.models.NNs import MLP_wrapper
 
 # %%
-import hls4ml
 
 # %% [markdown]
 # ## 1. Data Loading and Exploration
