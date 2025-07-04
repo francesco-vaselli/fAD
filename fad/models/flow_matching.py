@@ -15,6 +15,7 @@ from .NNs import (
     MLP_wrapper_with_einsum,
     MLP_wrapper,
     MLP_wrapper_with_sum,
+    fix_inputdim_MLP,
 )
 from ..validation.metrics import evaluate_performance
 
@@ -97,7 +98,7 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
 
         # Initialize model based on model_type
         if self.model_type == "mlp":
-            self.vf = MLP(
+            self.vf = fix_inputdim_MLP(
                 input_dim=self.input_dim,
                 time_dim=1,
                 hidden_dim=self.hidden_dim,
@@ -598,6 +599,211 @@ class FlowMatchingAnomalyDetector(BaseAnomalyDetector):
         self.vf.eval()
         self.wrapped_vf.eval()
         self.solver.eval()
+
+    def fit_with_compression(
+        self,
+        X: np.ndarray,
+        config: dict,
+        mode="OT",
+        eval_path=".",
+        eval_epochs=[5, 20, 100],
+        **kwargs,
+    ) -> list:
+        """
+        Fit the Flow Matching model with pruning and quantization.
+
+        Args:
+            X: Training data of shape (n_samples, n_features)
+            config: PQuant configuration dictionary for pruning/quantization
+            mode: Training mode ("OT" or "rectified")
+            eval_path: Path for evaluation results
+            eval_epochs: Epochs to evaluate at
+            **kwargs: Additional parameters
+
+        Returns:
+            list: Evaluation results if return_results=True
+        """
+        try:
+            from pquant import (
+                add_pruning_and_quantization,
+                iterative_train,
+                get_model_losses,
+            )
+            from quantizers.fixed_point.fixed_point_ops import get_fixed_quantizer
+        except ImportError:
+            raise ImportError(
+                "PQuant library not found. Please install PQuant for compression support."
+            )
+
+        # Override parameters if provided in kwargs
+        for key, value in kwargs.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
+
+        # Convert data to torch tensor and move to device
+        X_tensor = torch.tensor(X, dtype=torch.float32).to(self.device)
+
+        # Add pruning and quantization to the model
+        input_shape = (self.batch_size, self.input_dim + 1)  # add time dim
+        compressed_model = add_pruning_and_quantization(self.vf, config, input_shape)
+        compressed_model = compressed_model.to(self.device)
+
+        # Set up input quantizer
+        quantizer = get_fixed_quantizer(overflow_mode="SAT")
+
+        # Define training function compatible with PQuant
+        def train_flow_matching(
+            model,
+            trainloader,
+            device,
+            loss_func,
+            epoch,
+            optimizer,
+            scheduler,
+            *args,
+            **kwargs,
+        ):
+            """Training function for flow matching with compression"""
+            from flow_matching.path.scheduler import CondOTScheduler
+            from flow_matching.path import AffineProbPath
+
+            path = AffineProbPath(scheduler=CondOTScheduler())
+
+            for batch_idx, batch_data in enumerate(trainloader):
+                # Extract tensor from tuple if needed
+                if isinstance(batch_data, (list, tuple)):
+                    batch = batch_data[0]  # TensorDataset returns (tensor,) tuple
+                else:
+                    batch = batch_data
+
+                # Ensure batch is on correct device
+                batch = batch.to(device)
+
+                # Quantize inputs
+                x_1 = quantizer(
+                    batch, k=torch.tensor(1.0), i=torch.tensor(0.0), f=torch.tensor(7.0)
+                )
+
+                # Sample from Gaussian prior
+                x_0 = torch.randn_like(x_1).to(device)
+
+                # Sample time
+                t = torch.pow(torch.rand(x_0.shape[0]), 1 / (1 + self.alpha)).type_as(
+                    x_0
+                )
+
+                # Sample probability path
+                path_sample = path.sample(t=t, x_0=x_0, x_1=x_1)
+
+                optimizer.zero_grad()
+
+                # Flow matching loss
+                if mode == "OT":
+                    loss = torch.pow(
+                        model(path_sample.x_t, path_sample.t) - path_sample.dx_t, 2
+                    ).mean()
+                elif mode == "rectified":
+                    loss = torch.pow(
+                        (model(path_sample.x_t, path_sample.t) + x_0 - x_1), 2
+                    ).mean()
+
+                # Add compression losses (pruning regularization, quantization losses)
+                compression_losses = get_model_losses(
+                    model, torch.tensor(0.0).to(device)
+                )
+                loss += compression_losses
+
+                loss.backward()
+                optimizer.step()
+
+                if scheduler is not None:
+                    scheduler.step()
+
+        # Define validation function
+        def validate_flow_matching(
+            model, testloader, device, loss_func, epoch, *args, **kwargs
+        ):
+            """Validation function for flow matching"""
+            model.eval()
+            total_loss = 0
+            num_batches = 0
+
+            with torch.no_grad():
+                for batch_data in testloader:
+                    # Extract tensor from tuple if needed
+                    if isinstance(batch_data, (list, tuple)):
+                        batch = batch_data[0]  # TensorDataset returns (tensor,) tuple
+                    else:
+                        batch = batch_data
+
+                    # Ensure batch is on correct device
+                    batch = batch.to(device)
+
+                    # For validation, we can compute a simple reconstruction loss
+                    x_1 = quantizer(
+                        batch,
+                        k=torch.tensor(1.0),
+                        i=torch.tensor(0.0),
+                        f=torch.tensor(7.0),
+                    )
+                    t = torch.ones(x_1.shape[0]).to(device)
+
+                    # Evaluate vector field
+                    vf_output = model(x_1, t)
+                    loss = torch.norm(vf_output, dim=1).mean()
+                    total_loss += loss.item()
+                    num_batches += 1
+
+            avg_loss = total_loss / num_batches if num_batches > 0 else 0
+            print(f"Validation Loss: {avg_loss:.6f}")
+
+        # Create data loaders
+        dataset = torch.utils.data.TensorDataset(X_tensor)
+        train_loader = torch.utils.data.DataLoader(
+            dataset, batch_size=self.batch_size, shuffle=True, num_workers=2
+        )
+        val_loader = torch.utils.data.DataLoader(
+            dataset, batch_size=self.batch_size, shuffle=False, num_workers=2
+        )
+
+        # Set up optimizer and scheduler
+        optimizer = torch.optim.Adam(compressed_model.parameters(), lr=self.lr)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=config.get("epochs", 100) + config.get("fine_tuning_epochs", 20),
+        )
+
+        # Dummy loss function (not used in our custom training function)
+        loss_function = torch.nn.MSELoss()
+
+        # Train with compression using PQuant
+        print("Starting compressed training...")
+        trained_model = iterative_train(
+            model=compressed_model,
+            config=config,
+            train_func=train_flow_matching,
+            valid_func=validate_flow_matching,
+            trainloader=train_loader,
+            testloader=val_loader,
+            device=self.device,
+            loss_func=loss_function,
+            optimizer=optimizer,
+            scheduler=scheduler,
+        )
+
+        # Update our model with the trained compressed model
+        self.vf = trained_model
+
+        # Evaluate if requested
+        all_results = []
+        for epoch in eval_epochs:
+            if kwargs.get("return_results"):
+                results = evaluate_performance(
+                    self, self.name, eval_path, epoch, **kwargs
+                )
+                all_results.extend(results)
+
+        return all_results
 
 
 class FlowMatchingDistiller(BaseAnomalyDetector):
