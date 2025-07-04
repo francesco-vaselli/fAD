@@ -53,9 +53,9 @@ X_test4 = preprocessor.transform(dataset4.test)
 param_grid_mlp = {
     "hidden_dim": [16, 32, 64],
     "num_layers": [2, 3, 4, 5, 6],
-    "lr": [0.01, 0.001, 0.0005],
+    "lr": [0.01, 0.001],
     "batch_size": [256, 1024, 2048],
-    "alpha": [0, 1, 5, 10],
+    "alpha": [0, 1, 10],
 }
 keys, values = zip(*param_grid_mlp.items())
 experiments_mlp = [dict(zip(keys, v)) for v in itertools.product(*values)]
@@ -65,15 +65,15 @@ for exp in experiments_mlp:
 # Experiments with custom MLP (list_dims)
 param_grid_custom = {
     "list_dims": [[32, 64, 32], [32, 128, 32], [128, 128]],
-    "lr": [0.01, 0.001, 0.0005],
+    "lr": [0.01, 0.001],
     "batch_size": [256, 1024, 2048],
-    "alpha": [0, 1, 5, 10],
+    "alpha": [0, 1, 10],
 }
 keys, values = zip(*param_grid_custom.items())
 experiments_custom = [dict(zip(keys, v)) for v in itertools.product(*values)]
 
 # Combine all experiments
-experiments = experiments_mlp + experiments_custom
+experiments = experiments_mlp  # + experiments_custom
 
 all_results = []
 best_model_score = -1
