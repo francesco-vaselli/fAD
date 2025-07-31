@@ -79,7 +79,7 @@ keys, values = zip(*param_grid_custom.items())
 experiments_custom = [dict(zip(keys, v)) for v in itertools.product(*values)]
 
 # Combine all experiments
-experiments = experiments_mlp
+experiments = experiments_custom
 
 all_results = []
 best_model_score = -1
