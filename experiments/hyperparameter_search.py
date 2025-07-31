@@ -24,21 +24,21 @@ dataset = _load_h5_challenge_dataset(path_bkg, path_anom, n_train=3500000, n_tes
 
 path_anom2 = "/eos/user/f/fvaselli/fAD/fad/data/ad_challenge/leptoquark_LOWMASS_lepFilter_13TeV_filtered.h5"
 dataset2 = _load_h5_challenge_dataset(
-    path_bkg, path_anom2, n_train=100000, n_test=400000
+    path_bkg, path_anom2, n_train=3500000, n_test=400000
 )
 
 path_anom3 = (
     "/eos/user/f/fvaselli/fAD/fad/data/ad_challenge/hToTauTau_13TeV_PU20_filtered.h5"
 )
 dataset3 = _load_h5_challenge_dataset(
-    path_bkg, path_anom3, n_train=100000, n_test=400000
+    path_bkg, path_anom3, n_train=3500000, n_test=400000
 )
 
 path_anom4 = (
     "/eos/user/f/fvaselli/fAD/fad/data/ad_challenge/hChToTauNu_13TeV_PU20_filtered.h5"
 )
 dataset4 = _load_h5_challenge_dataset(
-    path_bkg, path_anom4, n_train=100000, n_test=400000
+    path_bkg, path_anom4, n_train=3500000, n_test=400000
 )
 
 preprocessor = Preprocessor([StandardScalerFunction()])
