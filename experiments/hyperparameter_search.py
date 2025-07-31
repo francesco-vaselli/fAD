@@ -41,18 +41,18 @@ dataset4 = _load_h5_challenge_dataset(
     path_bkg, path_anom4, n_train=3500000, n_test=400000
 )
 
-# preprocessor = Preprocessor([StandardScalerFunction()])
-# X_train = preprocessor.transform(dataset.train, fit=True)
-# X_test = preprocessor.transform(dataset.test)
-# X_test2 = preprocessor.transform(dataset2.test)
-# X_test3 = preprocessor.transform(dataset3.test)
-# X_test4 = preprocessor.transform(dataset4.test)
+preprocessor = Preprocessor([StandardScalerFunction()])
+X_train = preprocessor.transform(dataset.train, fit=True)
+X_test = preprocessor.transform(dataset.test)
+X_test2 = preprocessor.transform(dataset2.test)
+X_test3 = preprocessor.transform(dataset3.test)
+X_test4 = preprocessor.transform(dataset4.test)
 
-X_train = dataset.train
-X_test = dataset.test
-X_test2 = dataset2.test
-X_test3 = dataset3.test
-X_test4 = dataset4.test
+# X_train = dataset.train
+# X_test = dataset.test
+# X_test2 = dataset2.test
+# X_test3 = dataset3.test
+# X_test4 = dataset4.test
 
 # 2. Hyperparameter Search Space
 # Experiments with standard MLP (hidden_dim, num_layers)
@@ -79,7 +79,7 @@ keys, values = zip(*param_grid_custom.items())
 experiments_custom = [dict(zip(keys, v)) for v in itertools.product(*values)]
 
 # Combine all experiments
-experiments = experiments_custom  # + experiments_mlp
+experiments = experiments_mlp
 
 all_results = []
 best_model_score = -1
