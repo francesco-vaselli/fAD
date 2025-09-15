@@ -1,18 +1,19 @@
 # a config file for flow matching model 
 name: "32-3-mlp-1024-0.001-50"
 input_dim: 58
-hidden_dim: 32 #was 32 in good results
+hidden_dim: 16 #was 32 in good results
 model_type: mlp
-num_layers: 3 # was 4 in good results
+num_layers: 2 # was 4 in good results
 dropout_rate: 0.0
 use_batch_norm: false
 lr: 0.001
 batch_size: 1024
 reflow_steps: 3
 reflow_batches: 50
-iterations: 50
+iterations: 100
 print_every: 1
-device: null
+alpha: 0
+device: cuda
 
 # some notes on the best configs
 # bs=32 and 5 steps is what I did in the hackathon
